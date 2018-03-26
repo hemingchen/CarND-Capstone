@@ -3,7 +3,10 @@
 import rospy
 from std_msgs.msg import Bool
 from dbw_mkz_msgs.msg import ThrottleCmd, SteeringCmd, BrakeCmd, SteeringReport
-from geometry_msgs.msg import TwistStamped
+from geometry_msgs.msg import TwistStamped, PoseStamped
+
+from styx_msgs.msg import Lane, Waypoint
+
 import math
 
 from twist_controller import Controller
@@ -31,6 +34,7 @@ that we have created in the `__init__` function.
 
 '''
 
+
 class DBWNode(object):
     def __init__(self):
         rospy.init_node('dbw_node')
@@ -57,11 +61,24 @@ class DBWNode(object):
         # self.controller = Controller(<Arguments you wish to provide>)
 
         # TODO: Subscribe to all the topics you need to
+        rospy.Subscriber('/twist_cmd', TwistStamped, self.twist_cmd_cb)
+        rospy.Subscriber('/current_velocity', TwistStamped, self.velocity_cb)
+        rospy.Subscriber('/vehicle/dbw_enabled', Bool, self.dbw_enabled_cb)
+        rospy.Subscriber('/final_waypoints', Lane, self.waypoint_cb)
+        rospy.Subscriber('/current_pose', PoseStamped, self.pose_cb)
+
+        self.current_twist_cmd = None
+        self.current_velocity = None
+        self.current_dbw_enabled = False
+        self.current_final_waypoints = None
+        self.current_pose = None
+        self.current_yawrate = None
+        self.current_frame_id = None
 
         self.loop()
 
     def loop(self):
-        rate = rospy.Rate(50) # 50Hz
+        rate = rospy.Rate(50)  # 50Hz
         while not rospy.is_shutdown():
             # TODO: Get predicted throttle, brake, and steering using `twist_controller`
             # You should only publish the control commands if dbw is enabled
@@ -91,6 +108,23 @@ class DBWNode(object):
         bcmd.pedal_cmd_type = BrakeCmd.CMD_TORQUE
         bcmd.pedal_cmd = brake
         self.brake_pub.publish(bcmd)
+
+    def twist_cmd_cb(self, msg):
+        self.current_twist_cmd = msg.twist
+
+    def velocity_cb(self, msg):
+        self.current_velocity = msg.twist.linear.x
+        self.current_yawrate = msg.twist.angular.z
+
+    def dbw_enabled_cb(self, msg):
+        self.current_dbw_enabled = bool(msg.data)
+
+    def waypoint_cb(self, msg):
+        self.current_final_waypoints = msg.waypoints
+
+    def pose_cb(self, msg):
+        self.current_pose = msg.pose
+        self.current_frame_id = msg.header.frame_id
 
 
 if __name__ == '__main__':
