@@ -81,13 +81,8 @@ class TLDetector(object):
     def loop(self):
         rate = rospy.Rate(TL_DETECTOR_RATE)
         while not rospy.is_shutdown():
-            # If use broadcasted traffic light state info, publish at /vehicle/traffic_lights update frequency.
-            if USE_BROADCASTED_TL_STATES:
-                self.publish_traffic_light_wp_info()
-
-            # If use camera detected traffic light state info, publish at /image_color update frequency.
-            if USE_CAMERA_DETECTED_TL_STATES:
-                self.publish_traffic_light_wp_info()
+            # Publish /vehicle/traffic_lights at TL_DETECTOR_RATE frequency
+            self.publish_traffic_light_wp_info()
 
             rate.sleep()
 
