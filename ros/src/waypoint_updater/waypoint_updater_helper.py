@@ -86,8 +86,8 @@ def get_num_of_wps_during_const_spd_chg(v0, v1, a, dt_btw_wps):
     return n_wps
 
 
-def gen_wp_spd_for_ego_veh(next_wps_idx_start, next_wps_idx_end, next_decel_init_wp_idx, max_spd, max_spd_chg,
-                           dt_btw_wps):
+def update_next_wps_spd_profile(next_wps, next_wps_idx_start, next_wps_idx_end, next_decel_init_wp_idx, max_spd,
+                                max_spd_chg, dt_btw_wps):
     """
     Generate speed profile for ego vehicle for next sequence of waypoints to be published to /final_waypoints.
     """
@@ -96,21 +96,20 @@ def gen_wp_spd_for_ego_veh(next_wps_idx_start, next_wps_idx_end, next_decel_init
     # Condition 1:
     # When next decel init wp is way ahead, just maintain max speed.
     if next_decel_init_wp_idx > next_wps_idx_end:
-        return [max_spd] * next_wps_len
+        return next_wps
     # Condition 2:
     # When next stop is close by, prepare to start constant deceleration.
     else:
-        spd_profile = []
-        for wp_idx in range(next_wps_idx_start, next_wps_idx_end + 1):
-            if wp_idx < next_decel_init_wp_idx:
-                # Maintain max_spd
-                current_wp_spd = max_spd
-                spd_profile.append(current_wp_spd)
+        for wp_rel_idx, wp_global_idx in enumerate(range(next_wps_idx_start, next_wps_idx_end + 1)):
+            if wp_global_idx < next_decel_init_wp_idx:
+                # Maintain current waypoint speed, no need to change anything
+                pass
             else:
                 # Decelerate until zero speed at constant change rate
-                current_wp_spd = max_spd - max_spd_chg * (wp_idx - next_decel_init_wp_idx) * dt_btw_wps * 1.2
-                spd_profile.append(max(0, current_wp_spd))
-        return spd_profile
+                current_wp_spd = next_wps[wp_rel_idx].twist.twist.linear.x
+                expected_wp_spd = max_spd - max_spd_chg * (wp_global_idx - next_decel_init_wp_idx) * dt_btw_wps * 1.2
+                next_wps[wp_rel_idx].twist.twist.linear.x = min(current_wp_spd, expected_wp_spd)
+        return next_wps
 
 
 def generate_lane_object(frame_id, waypoints):

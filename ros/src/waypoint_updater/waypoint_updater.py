@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 import rospy
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, TwistStamped
 from styx_msgs.msg import Lane, Waypoint
 from std_msgs.msg import Int32
 
@@ -27,7 +27,8 @@ LOG_LEVEL = rospy.DEBUG
 
 # Vehicle speed limit
 MPH_TO_MPS = 0.44704
-MAX_SPD = 5.0 * MPH_TO_MPS  # m/s
+KMPH_TO_MPS = 0.27778
+MAX_SPD = 40.0 * KMPH_TO_MPS  # m/s
 MAX_SPD_CHG = 10  # m/s^2
 # Number of waypoints we will publish. You can change this number
 LOOKAHEAD_WPS = 20
@@ -44,6 +45,7 @@ class WaypointUpdater(object):
         rospy.init_node('waypoint_updater', log_level=LOG_LEVEL)
 
         rospy.Subscriber('/current_pose', PoseStamped, self.pose_cb)
+        rospy.Subscriber('/current_velocity', TwistStamped, self.current_velocity_cb)
         rospy.Subscriber('/base_waypoints', Lane, self.waypoints_cb)
         rospy.Subscriber('/traffic_waypoint', Int32, self.traffic_cb)
         rospy.Subscriber('/obstacle_waypoint', Int32, self.obstacle_cb)
@@ -54,6 +56,7 @@ class WaypointUpdater(object):
         self.ego_veh_waypoint_pub = rospy.Publisher('/ego_veh_waypoint', Int32, queue_size=1)
 
         self.current_pose = None
+        self.current_velocity = None
         self.current_frame_id = None
         self.base_waypoints = None
         self.current_closest_wp_idx = None
@@ -74,6 +77,11 @@ class WaypointUpdater(object):
         # Publish next LOOKAHEAD_WPS waypoints
         self.publish_final_waypoints()
 
+    def current_velocity_cb(self, msg):
+        # Record current linear and angular velocities of the ego vehicle
+        self.current_velocity = msg.twist
+        rospy.logdebug("current velocity received: %.2f m/s", self.current_velocity.linear.x)
+
     def waypoints_cb(self, msg):
         # base_waypoints are only published once, it needs to be stored in this node
         self.base_waypoints = msg.waypoints
@@ -87,7 +95,7 @@ class WaypointUpdater(object):
             self.next_decel_init_wp_idx = None
             rospy.loginfo("no red traffic light info. maintain max spd or accel")
 
-        # Actual red traffic light waypoint idx received
+        # If red traffic light waypoint idx is received, update the latest point where a deceleration should start.
         else:
             self.next_red_tl_wp_idx = msg.data
             self.next_decel_init_wp_idx = self.next_red_tl_wp_idx - self.n_wps_to_stop_at_max_spd
@@ -134,8 +142,18 @@ class WaypointUpdater(object):
             #############################################################
             next_wps_idx_start = closest_wp_idx
             next_wps_idx_end = min(len(self.base_waypoints), closest_wp_idx + LOOKAHEAD_WPS)
-            next_wps = self.base_waypoints[next_wps_idx_start: next_wps_idx_end]
             rospy.logdebug("next final wp idx: %s-%s", next_wps_idx_start, next_wps_idx_end)
+
+            # Create next waypoints from fresh
+            next_wps = []
+            for i in range(next_wps_idx_start, next_wps_idx_end):
+                wp = Waypoint()
+                wp.pose.pose.position.x = self.base_waypoints[i].pose.pose.position.x
+                wp.pose.pose.position.y = self.base_waypoints[i].pose.pose.position.y
+                wp.pose.pose.position.z = self.base_waypoints[i].pose.pose.position.z
+                # For now, use default waypoint speed already defined by waypoint_loader.
+                wp.twist.twist.linear.x = self.base_waypoints[i].twist.twist.linear.x
+                next_wps.append(wp)
             rospy.logdebug("next final wp len: %s", len(next_wps))
 
             #############################################################
@@ -150,16 +168,14 @@ class WaypointUpdater(object):
             else:
                 # If approaching a traffic light, adjust speed properly.
                 if self.next_red_tl_wp_idx >= 0 and self.next_decel_init_wp_idx >= 0:
-                    spd_profile = waypoint_updater_helper.gen_wp_spd_for_ego_veh(
-                        next_wps_idx_start=next_wps_idx_start, next_wps_idx_end=next_wps_idx_end,
+                    next_wps = waypoint_updater_helper.update_next_wps_spd_profile(
+                        next_wps=next_wps, next_wps_idx_start=next_wps_idx_start, next_wps_idx_end=next_wps_idx_end,
                         next_decel_init_wp_idx=self.next_decel_init_wp_idx, max_spd=MAX_SPD, max_spd_chg=MAX_SPD_CHG,
                         dt_btw_wps=DT_BTW_WPS)
-                    for i, wp in enumerate(next_wps):
-                        wp.twist.twist.linear.x = spd_profile[i]
-                # Otherwise just use max spd, e.g. when tl_detector reports next_red_tl_wp_idx = -1.
+
+                # Otherwise just use default spd, e.g. when tl_detector reports next_red_tl_wp_idx = -1.
                 else:
-                    for waypoint in next_wps:
-                        waypoint.twist.twist.linear.x = MAX_SPD
+                    pass
 
             #############################################################
             # 4. Create and publish lane object to /final_waypoints topic
