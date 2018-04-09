@@ -1,17 +1,18 @@
 #!/usr/bin/env python
 
-import rospy
-from std_msgs.msg import Int32
-from geometry_msgs.msg import PoseStamped, Pose, Point
-from styx_msgs.msg import TrafficLightArray, TrafficLight
-from styx_msgs.msg import Lane
-from sensor_msgs.msg import Image
-from cv_bridge import CvBridge
-from light_classification.tl_classifier import TLClassifier
-import tf
-import cv2
 import yaml
-from math import cos, sin, sqrt
+from math import sqrt
+
+import rospy
+import tf
+from cv_bridge import CvBridge
+from geometry_msgs.msg import PoseStamped, Point
+from sensor_msgs.msg import Image
+from std_msgs.msg import Int32
+from styx_msgs.msg import Lane
+from styx_msgs.msg import TrafficLightArray, TrafficLight
+
+from light_classification.tl_classifier import TLClassifier
 
 LOG_LEVEL = rospy.INFO
 
@@ -57,15 +58,18 @@ class TLDetector(object):
         self.current_pose = None
         self.current_closest_wp_idx = None
         self.base_waypoints = None
-        self.current_ego_veh_waypoint = None
         self.current_camera_image = None
+        self.current_tl_state = None
+
+        self.last_n_tl_state_preds = []
         self.tl_wp_indices = None
         self.traffic_lights = None
-        self.traffic_light_state = TrafficLight.UNKNOWN
-        self.last_traffic_light_state = TrafficLight.UNKNOWN
-        self.last_wp = -1
-        self.state_count = 0
-        self.has_image = False
+
+        self.tl_pred_data_source = None
+        if USE_CAMERA_DETECTED_TL_STATES:
+            self.tl_pred_data_source = "(from camera)"
+        if USE_BROADCASTED_TL_STATES:
+            self.tl_pred_data_source = "(from broadcast)"
 
         self.bridge = CvBridge()
         self.light_classifier = TLClassifier()
@@ -105,7 +109,6 @@ class TLDetector(object):
 
     def image_cb(self, msg):
         # Cache current camera image
-        self.has_image = True
         self.current_camera_image = msg
         rospy.logdebug("camera image received")
 
@@ -169,6 +172,16 @@ class TLDetector(object):
         else:
             return None, None, None
 
+    def traffic_light_state_prediction_filter(self, next_tl_state_raw_pred):
+        # Maintain a FIFO stack with length STATE_COUNT_THRESHOLD
+        self.last_n_tl_state_preds.append(next_tl_state_raw_pred)
+        if len(self.last_n_tl_state_preds) > STATE_COUNT_THRESHOLD:
+            self.last_n_tl_state_preds.pop()
+
+        # If all elements are the same and different than current state, declare a new state.
+        if len(set(self.last_n_tl_state_preds)) == 1 and next_tl_state_raw_pred != self.current_tl_state:
+            self.current_tl_state = next_tl_state_raw_pred
+
     def publish_traffic_light_wp_info(self):
         # Find out next traffic light:
         # If red and close to ego vehicle, publish its stop line coord (actually the coord of the waypoint nearest
@@ -177,24 +190,28 @@ class TLDetector(object):
         next_tl_idx, next_tl_wp_idx, dist_to_next_tl = self.get_next_traffic_light_info()
 
         if next_tl_idx is not None and next_tl_wp_idx is not None and dist_to_next_tl is not None:
-            next_tl_state = None
+            next_tl_state_raw_pred = None
 
             # For unit test, use broadcasted traffic light state.
             if USE_BROADCASTED_TL_STATES:
-                next_tl_state = self.get_traffic_light_state_from_broadcast(next_tl_idx)
-                rospy.loginfo("next traffic light idx=%d, dist=%.2f, state=%s(from broadcast)",
-                              next_tl_idx, dist_to_next_tl, self.get_traffic_light_state_name(next_tl_state))
+                next_tl_state_raw_pred = self.get_traffic_light_state_from_broadcast(next_tl_idx)
             # For comprehensive test and production, use camera data and ml to determine traffic light state.
-            elif USE_CAMERA_DETECTED_TL_STATES:
-                next_tl_state = self.get_traffic_light_state_from_image()
-                rospy.loginfo("next traffic light idx=%d, dist=%.2f, state=%s(from camera)",
-                              next_tl_idx, dist_to_next_tl, self.get_traffic_light_state_name(next_tl_state))
-            # Unknown debug option
-            else:
-                rospy.logdebug("unable to determine next traffic light, unknown debug option")
+            if USE_CAMERA_DETECTED_TL_STATES:
+                next_tl_state_raw_pred = self.get_traffic_light_state_from_image()
+            rospy.logdebug("next traffic light idx=%d, dist=%.2f, raw pred state=%s%s",
+                           next_tl_idx, dist_to_next_tl,
+                           self.get_traffic_light_state_name(next_tl_state_raw_pred),
+                           self.tl_pred_data_source)
+
+            # Declare prediction result only if it has repeated STATE_COUNT_THRESHOLD times
+            self.traffic_light_state_prediction_filter(next_tl_state_raw_pred)
+            rospy.loginfo("next traffic light idx=%d, dist=%.2f, state=%s%s",
+                          next_tl_idx, dist_to_next_tl,
+                          self.get_traffic_light_state_name(self.current_tl_state),
+                          self.tl_pred_data_source)
 
             # Publish actual traffic light waypoint idx only if in red and close to ego vehicle
-            if next_tl_state == TrafficLight.RED and dist_to_next_tl < TL_VISIBLE_DIST:
+            if self.current_tl_state == TrafficLight.RED and dist_to_next_tl < TL_VISIBLE_DIST:
                 self.upcoming_red_light_pub.publish(Int32(next_tl_wp_idx))
                 rospy.loginfo("next traffic light info published")
             # Publish -1 in case no need to stop at this moment
