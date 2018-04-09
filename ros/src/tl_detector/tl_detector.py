@@ -12,9 +12,8 @@ import tf
 import cv2
 import yaml
 from math import cos, sin, sqrt
-import tl_detector_helper
 
-LOG_LEVEL = rospy.DEBUG
+LOG_LEVEL = rospy.INFO
 
 # Min number of successive occurrence before a traffic light detection result is used
 STATE_COUNT_THRESHOLD = 3
@@ -26,6 +25,10 @@ USE_BROADCASTED_TL_STATES = False
 USE_CAMERA_DETECTED_TL_STATES = not USE_BROADCASTED_TL_STATES
 # Number of waypoints to search before and/or after the nearest waypoint identified in previous cycle
 INCR_WP_SEARCH_RANGE = 20
+# Adjust execution rate to reduce latency between vm and simulator on host
+TL_DETECTOR_RATE = 3
+# Int32 value from tl_detector if no valid red traffic light in sight
+NO_VALID_RED_TL_WP = -1
 
 
 class TLDetector(object):
@@ -44,15 +47,17 @@ class TLDetector(object):
         rospy.Subscriber('/vehicle/traffic_lights', TrafficLightArray, self.traffic_cb)
         rospy.Subscriber('/current_pose', PoseStamped, self.pose_cb)
         rospy.Subscriber('/base_waypoints', Lane, self.waypoints_cb)
-        rospy.Subscriber('/image_color', Image, self.image_cb)
+        rospy.Subscriber('/image_color', Image, self.image_cb, queue_size=5)
+        rospy.Subscriber('/ego_veh_waypoint', Int32, self.ego_veh_waypoint_cb)
 
-        self.upcoming_red_light_pub = rospy.Publisher('/traffic_waypoint', Int32, queue_size=1)
+        self.upcoming_red_light_pub = rospy.Publisher('/traffic_waypoint', Int32, queue_size=5)
 
         self.config = yaml.load(config_string)
 
         self.current_pose = None
         self.current_closest_wp_idx = None
         self.base_waypoints = None
+        self.current_ego_veh_waypoint = None
         self.current_camera_image = None
         self.tl_wp_indices = None
         self.traffic_lights = None
@@ -66,17 +71,25 @@ class TLDetector(object):
         self.light_classifier = TLClassifier()
         self.listener = tf.TransformListener()
 
-        rospy.spin()
+        # Had to use loop here to reduce load on vm, otherwise latency between vm and simulator will break the control.
+        self.loop()
+
+    def loop(self):
+        rate = rospy.Rate(TL_DETECTOR_RATE)
+        while not rospy.is_shutdown():
+            # If use broadcasted traffic light state info, publish at /vehicle/traffic_lights update frequency.
+            if USE_BROADCASTED_TL_STATES:
+                self.publish_traffic_light_wp_info()
+
+            # If use camera detected traffic light state info, publish at /image_color update frequency.
+            if USE_CAMERA_DETECTED_TL_STATES:
+                self.publish_traffic_light_wp_info()
+
+            rate.sleep()
 
     def pose_cb(self, msg):
         # Record current pos
         self.current_pose = msg.pose
-        # Get cloeset waypoint to ego vehicle
-        self.update_closest_wp_to_ego_veh()
-
-        # If use broadcasted traffic light state info, publish at /current_pose update frequency
-        if USE_BROADCASTED_TL_STATES:
-            self.publish_traffic_light_wp_info()
 
     def waypoints_cb(self, msg):
         # base_waypoints are only published once, it needs to be stored in this node
@@ -91,33 +104,16 @@ class TLDetector(object):
         self.update_closest_wp_idx_to_traffic_lights()
 
     def image_cb(self, msg):
-        """
-        Identifies red lights in the incoming camera image and publishes the index
-            of the waypoint closest to the red light's stop line to /traffic_waypoint
-
-        Args:
-            msg (Image): image from car-mounted camera
-        """
         # Cache current camera image
         self.has_image = True
         self.current_camera_image = msg
-        rospy.loginfo("camera image received")
+        rospy.logdebug("camera image received")
 
-        # If use camera detected traffic light state info, publish at /image_color update frequency
-        if USE_CAMERA_DETECTED_TL_STATES:
-            self.publish_traffic_light_wp_info()
+    def ego_veh_waypoint_cb(self, msg):
+        self.current_closest_wp_idx = msg.data
+        rospy.logdebug("closest wp to ego veh idx=%s", self.current_closest_wp_idx)
 
-    def get_closest_waypoint(self, position):
-        """
-        Identifies the closest path waypoint to the given position
-            https://en.wikipedia.org/wiki/Closest_pair_of_points_problem
-
-        Args:
-            position (Point): position to match a waypoint to
-
-        Returns:
-            int: index of the closest waypoint in self.base_waypoints
-        """
+    def get_closest_waypoint_near_position(self, position):
         min_dist = float('inf')
         closest_wp_idx = -1
 
@@ -130,29 +126,15 @@ class TLDetector(object):
 
         return closest_wp_idx
 
-    def get_traffic_light_state_from_image(self):
-        """
-        Determines the current color of the traffic light
+    def get_traffic_light_state_from_broadcast(self, tl_idx):
+        return self.traffic_lights[tl_idx].state
 
-        Returns:
-            int: traffic light state (specified in styx_msgs/TrafficLight)
-        """
+    def get_traffic_light_state_from_image(self):
         if self.current_camera_image is not None:
             # Get traffic light classification result
             cv_image = self.bridge.imgmsg_to_cv2(self.current_camera_image, "bgr8")
+
             return self.light_classifier.get_classification(cv_image)
-
-    def update_closest_wp_to_ego_veh(self):
-        if self.current_pose is not None and self.base_waypoints is not None:
-            # Get closest waypoint in front of ego vehicle
-            closest_wp_idx = tl_detector_helper.get_closest_wp_idx(
-                pose=self.current_pose,
-                waypoints=self.base_waypoints,
-                prev_closest_wp_idx=self.current_closest_wp_idx,
-                incr_wp_search_range=INCR_WP_SEARCH_RANGE)
-
-            self.current_closest_wp_idx = closest_wp_idx
-            rospy.logdebug("closest wp idx: %s", closest_wp_idx)
 
     def update_closest_wp_idx_to_traffic_lights(self):
         # Find out closest waypoints to each traffic light's stop line, do it only once.
@@ -163,12 +145,12 @@ class TLDetector(object):
                 tl_stopline_pos.x = self.config["stop_line_positions"][i_tl][0]
                 tl_stopline_pos.y = self.config["stop_line_positions"][i_tl][1]
 
-                closest_wp_idx = self.get_closest_waypoint(tl_stopline_pos)
+                closest_wp_idx = self.get_closest_waypoint_near_position(tl_stopline_pos)
                 tl_wp_indices.append(closest_wp_idx)
-                rospy.logdebug("traffic light %s -> closest wp %d", i_tl, closest_wp_idx)
+                rospy.logdebug("traffic light idx=%s-->closest wp idx=%d", i_tl, closest_wp_idx)
 
             self.tl_wp_indices = tl_wp_indices
-            rospy.loginfo("closest wps to traffic light stoplines identified")
+            rospy.logdebug("closest wps to traffic light stoplines identified")
 
     def get_next_traffic_light_info(self):
         # Get position of next traffic light (nearest waypoint to traffic light stop line)
@@ -199,24 +181,26 @@ class TLDetector(object):
 
             # For unit test, use broadcasted traffic light state.
             if USE_BROADCASTED_TL_STATES:
-                next_tl_state = self.traffic_lights[next_tl_idx].state
-                rospy.logdebug("next traffic light idx=%d, dist=%.2f, state=%s(from broadcast)",
-                               next_tl_idx, dist_to_next_tl, self.get_traffic_light_state_name(next_tl_state))
+                next_tl_state = self.get_traffic_light_state_from_broadcast(next_tl_idx)
+                rospy.loginfo("next traffic light idx=%d, dist=%.2f, state=%s(from broadcast)",
+                              next_tl_idx, dist_to_next_tl, self.get_traffic_light_state_name(next_tl_state))
             # For comprehensive test and production, use camera data and ml to determine traffic light state.
             elif USE_CAMERA_DETECTED_TL_STATES:
                 next_tl_state = self.get_traffic_light_state_from_image()
-                rospy.logdebug("next traffic light idx=%d, dist=%.2f, state=%s(from camera)",
-                               next_tl_idx, dist_to_next_tl, self.get_traffic_light_state_name(next_tl_state))
+                rospy.loginfo("next traffic light idx=%d, dist=%.2f, state=%s(from camera)",
+                              next_tl_idx, dist_to_next_tl, self.get_traffic_light_state_name(next_tl_state))
             # Unknown debug option
             else:
                 rospy.logdebug("unable to determine next traffic light, unknown debug option")
 
-            # Publish only if in red and close to ego vehicle
-            if next_tl_state == 0 and dist_to_next_tl < TL_VISIBLE_DIST:
+            # Publish actual traffic light waypoint idx only if in red and close to ego vehicle
+            if next_tl_state == TrafficLight.RED and dist_to_next_tl < TL_VISIBLE_DIST:
                 self.upcoming_red_light_pub.publish(Int32(next_tl_wp_idx))
-                rospy.logdebug("next traffic light info published")
+                rospy.loginfo("next traffic light info published")
+            # Publish -1 in case no need to stop at this moment
             else:
-                rospy.logdebug("no need to publish next traffic light info")
+                self.upcoming_red_light_pub.publish(Int32(NO_VALID_RED_TL_WP))
+                rospy.loginfo("no need to stop at this moment, published -1 as next traffic light info")
 
     @staticmethod
     def get_traffic_light_state_name(state):

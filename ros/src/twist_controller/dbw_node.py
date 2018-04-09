@@ -33,6 +33,9 @@ that we have created in the `__init__` function.
 
 LOG_LEVEL = rospy.INFO
 
+# Adjust execution rate to reduce latency between vm and simulator on host. Udacity default=50
+DBW_CONTROLLER_RATE = 25
+
 
 class DBWNode(object):
     def __init__(self):
@@ -83,7 +86,7 @@ class DBWNode(object):
         self.loop()
 
     def loop(self):
-        rate = rospy.Rate(50)  # 50Hz
+        rate = rospy.Rate(DBW_CONTROLLER_RATE)
         while not rospy.is_shutdown():
             if self.current_velocity and self.twist_cmd:
                 # Run twist controller to get throttle brake and steer
@@ -91,7 +94,7 @@ class DBWNode(object):
                     proposed_twist=self.twist_cmd.twist,
                     current_twist=self.current_velocity.twist,
                     dbw_enabled=self.dbw_enabled)
-                rospy.loginfo("throttle: %.3f brake: %.3f steer: %.3f", throttle, brake, steer)
+                rospy.loginfo("throttle=%.3f, brake=%.3f, steer=%.3f", throttle, brake, steer)
 
                 # Publish only if dbw_enabled
                 if self.dbw_enabled:

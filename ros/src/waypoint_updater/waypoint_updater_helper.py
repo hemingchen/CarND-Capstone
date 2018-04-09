@@ -7,24 +7,10 @@ import math
 from styx_msgs.msg import Lane
 
 
-def distance(waypoints, p1, p2):
-    """ Get total distance between two waypoints given their index"""
-    gap = 0
-    for i in range(p1, p2 + 1):
-        gap += get_distance(waypoints[p1].pose.pose.position, waypoints[i].pose.pose.position)
-        p1 = i
-    return gap
-
-
-def generate_lane_object(frame_id, waypoints):
-    lane = Lane()
-    lane.header.frame_id = frame_id
-    lane.waypoints = waypoints
-    lane.header.stamp = rospy.Time.now()
-    return lane
-
-
 def get_euler_angle(pose):
+    """
+    Get Euler angle from current position expressed as quaternion. Ego vehicle yaw will be needed from Euler angle.
+    """
     return tf.transformations.euler_from_quaternion([
         pose.orientation.x,
         pose.orientation.y,
@@ -33,18 +19,22 @@ def get_euler_angle(pose):
 
 
 def get_distance(position1, position2):
+    """
+    Get distance between two positions
+    """
     dx = position1.x - position2.x
     dy = position1.y - position2.y
     return sqrt(dx * dx + dy * dy)
 
 
-def wp_in_front_of_ego_veh(pose, waypoint):
+def wp_is_in_front_of_ego_veh(pose, waypoint):
     """
     Take one waypoint and current pose of ego vehicle, do a coordinate frame translation to move the origin to the
     current pos of ego vehicle and align the new frame's x-axis to ego vehicle x-axis.
+
     Args:
-        pose (object) : A pose object
-        waypoints (object) : A waypoint object
+        pose (Pose) : A pose object
+        waypoints (Waypoint) : A waypoint object
     Returns:
         bool : True if the waypoint is behind the car False if in front
     """
@@ -62,6 +52,9 @@ def wp_in_front_of_ego_veh(pose, waypoint):
 
 
 def get_closest_wp_idx(pose, waypoints, prev_closest_wp_idx, incr_wp_search_range):
+    """
+    Get closest waypoint in front of ego vehicle
+    """
     min_dist = float('inf')
     ego_pos = pose.position
     closest_wp_idx = 0
@@ -72,7 +65,7 @@ def get_closest_wp_idx(pose, waypoints, prev_closest_wp_idx, incr_wp_search_rang
     # Search for current nearest waypoint based on previous cycle result
     for i, wp in enumerate(wps_to_search):
         dist = get_distance(ego_pos, wp.pose.pose.position)
-        if dist < min_dist and wp_in_front_of_ego_veh(pose, wp):
+        if dist < min_dist and wp_is_in_front_of_ego_veh(pose, wp):
             closest_wp_idx, min_dist = i, dist
 
     # Add the offset back to get idx w.r.t the original base_waypoints
@@ -82,37 +75,47 @@ def get_closest_wp_idx(pose, waypoints, prev_closest_wp_idx, incr_wp_search_rang
     return closest_wp_idx
 
 
-def get_next_waypoints(waypoints, i, n):
-    """Returns a list of n waypoints ahead of the vehicle"""
-    m = min(len(waypoints), i + n)
-    return waypoints[i:m]
-
-
-def fit_polynomial(waypoints, degree):
-    """fits a polynomial for given waypoints"""
-    x_coords = [waypoint.pose.pose.position.x for waypoint in waypoints]
-    y_coords = [waypoint.pose.pose.position.y for waypoint in waypoints]
-    return np.polyfit(x_coords, y_coords, degree)
-
-
-def calculateRCurve(coeffs, X):
+def get_num_of_wps_during_const_spd_chg(v0, v1, a, dt_btw_wps):
     """
-    calculates the radius of curvature
-    Args:
-        coeffs (vector) :polyfit coefficient of waypoints
-        X (1D np array) : location to evaluate radius of curvature
-    Return:
-        radius_output (1D np array) : radius of curvature for X
+    Get the min number of waypoints the ego veh needs to pass before completing the constant speed change.
+    Assume v0, v1 in m/s, a in m/s^2 and a has sign.
     """
-    if coeffs is None:
-        return None
-    coeffs_diff_1 = np.polyder(coeffs, 1)
-    coeffs_diff_2 = np.polyder(coeffs, 2)
+    t = (v1 - v0) / a
+    n_wps = math.ceil(t / dt_btw_wps)
 
-    radius_output = np.zeros(X.shape[0])
-    for x_index in range(X.shape[0]):
-        individual_x = X[x_index]
-        radius = (1 + (np.polyval(coeffs_diff_1, individual_x) ** 2) ** 1.5) \
-                 / np.absolute(np.polyval(coeffs_diff_2, individual_x))
-        radius_output[x_index] = radius
-    return radius_output
+    return n_wps
+
+
+def gen_wp_spd_for_ego_veh(next_wps_idx_start, next_wps_idx_end, next_decel_init_wp_idx, max_spd, max_spd_chg,
+                           dt_btw_wps):
+    """
+    Generate speed profile for ego vehicle for next sequence of waypoints to be published to /final_waypoints.
+    """
+    next_wps_len = next_wps_idx_end - next_wps_idx_start + 1
+
+    # Condition 1:
+    # When next decel init wp is way ahead, just maintain max speed.
+    if next_decel_init_wp_idx > next_wps_idx_end:
+        return [max_spd] * next_wps_len
+    # Condition 2:
+    # When next stop is close by, prepare to start constant deceleration.
+    else:
+        spd_profile = []
+        for wp_idx in range(next_wps_idx_start, next_wps_idx_end + 1):
+            if wp_idx < next_decel_init_wp_idx:
+                # Maintain max_spd
+                current_wp_spd = max_spd
+                spd_profile.append(current_wp_spd)
+            else:
+                # Decelerate until zero speed at constant change rate
+                current_wp_spd = max_spd - max_spd_chg * (wp_idx - next_decel_init_wp_idx) * dt_btw_wps * 1.2
+                spd_profile.append(max(0, current_wp_spd))
+        return spd_profile
+
+
+def generate_lane_object(frame_id, waypoints):
+    lane = Lane()
+    lane.header.frame_id = frame_id
+    lane.waypoints = waypoints
+    lane.header.stamp = rospy.Time.now()
+    return lane

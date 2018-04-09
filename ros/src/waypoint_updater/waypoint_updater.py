@@ -27,13 +27,16 @@ LOG_LEVEL = rospy.INFO
 
 # Vehicle speed limit
 MPH_TO_MPS = 0.44704
-MAX_SPEED = 20.0 * MPH_TO_MPS  # in m/s
-
+MAX_SPD = 20.0 * MPH_TO_MPS  # m/s
+MAX_SPD_CHG = 10  # m/s^2
 # Number of waypoints we will publish. You can change this number
 LOOKAHEAD_WPS = 20
-
 # Number of waypoints to search before and/or after the nearest waypoint identified in previous cycle
 INCR_WP_SEARCH_RANGE = 20
+# Travel time between waypoints, an rough estimate needed to calculate at which waypoint the deceleration should start.
+DT_BTW_WPS = 0.02  # seconds
+# Int32 value from tl_detector if no valid red traffic light in sight
+NO_VALID_RED_TL_WP = -1
 
 
 class WaypointUpdater(object):
@@ -45,13 +48,21 @@ class WaypointUpdater(object):
         rospy.Subscriber('/traffic_waypoint', Int32, self.traffic_cb)
         rospy.Subscriber('/obstacle_waypoint', Int32, self.obstacle_cb)
 
-        self.final_waypoints_pub = rospy.Publisher('final_waypoints', Lane, queue_size=1)
+        # Publish final waypoints, which are the next sequence of waypoints the ego vehicle needs to follow.
+        self.final_waypoints_pub = rospy.Publisher('/final_waypoints', Lane, queue_size=1)
+        # Publish ego vehicle waypoint idx, which is the idx of the base waypoints cloeses to ego vehicle.
+        self.ego_veh_waypoint_pub = rospy.Publisher('/ego_veh_waypoint', Int32, queue_size=1)
 
         self.current_pose = None
         self.current_frame_id = None
         self.base_waypoints = None
         self.current_closest_wp_idx = None
-        self.current_red_tl_wp_idx = None
+        self.next_red_tl_wp_idx = None
+        self.next_decel_init_wp_idx = None
+
+        # Identify numer of wps needed to a complete stop while traveling at MAX_SPD
+        self.n_wps_to_stop_at_max_spd = waypoint_updater_helper.get_num_of_wps_during_const_spd_chg(
+            v0=MAX_SPD, v1=0, a=-MAX_SPD_CHG, dt_btw_wps=DT_BTW_WPS)
 
         rospy.spin()
 
@@ -69,8 +80,19 @@ class WaypointUpdater(object):
         rospy.logdebug("%d base_waypoints received", len(self.base_waypoints))
 
     def traffic_cb(self, msg):
-        self.current_red_tl_wp_idx = msg.data
-        rospy.loginfo("red traffic light info received, near wp idx=%d", self.current_red_tl_wp_idx)
+        # Store next red traffic light stop line waypoint idx
+        # If data=NO_VALID_RED_TL_WP, it means no need to stop, accelerate or maintain max spd.
+        if msg.data == NO_VALID_RED_TL_WP:
+            self.next_red_tl_wp_idx = None
+            self.next_decel_init_wp_idx = None
+            rospy.loginfo("no red traffic light info. maintain max spd or accel")
+
+        # Actual red traffic light waypoint idx received
+        else:
+            self.next_red_tl_wp_idx = msg.data
+            self.next_decel_init_wp_idx = self.next_red_tl_wp_idx - self.n_wps_to_stop_at_max_spd
+            rospy.loginfo("red traffic light info received, near wp idx=%d", self.next_red_tl_wp_idx)
+            rospy.loginfo("next decel init wp idx=%d", self.next_decel_init_wp_idx)
 
     def obstacle_cb(self, msg):
         # TODO: Callback for /obstacle_waypoint message. We will implement it later
@@ -92,7 +114,9 @@ class WaypointUpdater(object):
 
     def publish_final_waypoints(self):
         if self.current_pose is not None and self.base_waypoints is not None:
-            # Get closest waypoint in front of ego vehicle
+            #############################################################
+            # 1. Get closest waypoint in front of ego vehicle
+            #############################################################
             closest_wp_idx = waypoint_updater_helper.get_closest_wp_idx(
                 pose=self.current_pose,
                 waypoints=self.base_waypoints,
@@ -100,19 +124,32 @@ class WaypointUpdater(object):
                 incr_wp_search_range=INCR_WP_SEARCH_RANGE)
 
             self.current_closest_wp_idx = closest_wp_idx
-            rospy.logdebug("closest wp idx: %s", closest_wp_idx)
+            rospy.loginfo("closest wp to ego veh idx=%s", closest_wp_idx)
 
-            # Get next LOOKAHEAD_WPS waypoints in front of ego vehicle
+            # Publish ego vehicle waypoint idx to /ego_veh_waypoint topic
+            self.ego_veh_waypoint_pub.publish(Int32(self.current_closest_wp_idx))
+
+            #############################################################
+            # 2. Get next LOOKAHEAD_WPS waypoints in front of ego vehicle
+            #############################################################
             next_wps_idx_start = closest_wp_idx
             next_wps_idx_end = min(len(self.base_waypoints), closest_wp_idx + LOOKAHEAD_WPS)
             next_wps = self.base_waypoints[next_wps_idx_start: next_wps_idx_end]
             rospy.logdebug("next final wp idx: %s-%s", next_wps_idx_start, next_wps_idx_end)
             rospy.logdebug("next final wp len: %s", len(next_wps))
 
-            # Adjust target speed at each waypoint
-            target_speed = MAX_SPEED  # if closest_wp_idx < 400 else 0 # test stop
-            for waypoint in next_wps:
-                waypoint.twist.twist.linear.x = target_speed
+            # Get speed profile if next stop identified
+            if self.next_red_tl_wp_idx >= 0 and self.next_decel_init_wp_idx >= 0:
+                spd_profile = waypoint_updater_helper.gen_wp_spd_for_ego_veh(
+                    next_wps_idx_start=next_wps_idx_start, next_wps_idx_end=next_wps_idx_end,
+                    next_decel_init_wp_idx=self.next_decel_init_wp_idx, max_spd=MAX_SPD, max_spd_chg=MAX_SPD_CHG,
+                    dt_btw_wps=DT_BTW_WPS)
+                for i, wp in enumerate(next_wps):
+                    wp.twist.twist.linear.x = spd_profile[i]
+            # Otherwise just use max spd, e.g. when tl_detector reports next_red_tl_wp_idx = -1.
+            else:
+                for waypoint in next_wps:
+                    waypoint.twist.twist.linear.x = MAX_SPD
 
             # Create and publish lane object to /final_waypoints topic
             next_lane = waypoint_updater_helper.generate_lane_object(self.current_frame_id, next_wps)
