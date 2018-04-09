@@ -23,11 +23,11 @@ as well as to verify your TL classifier.
 TODO (for Yousuf and Aaron): Stopline location for each traffic light.
 '''
 
-LOG_LEVEL = rospy.INFO
+LOG_LEVEL = rospy.DEBUG
 
 # Vehicle speed limit
 MPH_TO_MPS = 0.44704
-MAX_SPD = 20.0 * MPH_TO_MPS  # m/s
+MAX_SPD = 5.0 * MPH_TO_MPS  # m/s
 MAX_SPD_CHG = 10  # m/s^2
 # Number of waypoints we will publish. You can change this number
 LOOKAHEAD_WPS = 20
@@ -138,20 +138,30 @@ class WaypointUpdater(object):
             rospy.logdebug("next final wp idx: %s-%s", next_wps_idx_start, next_wps_idx_end)
             rospy.logdebug("next final wp len: %s", len(next_wps))
 
-            # Get speed profile if next stop identified
-            if self.next_red_tl_wp_idx >= 0 and self.next_decel_init_wp_idx >= 0:
-                spd_profile = waypoint_updater_helper.gen_wp_spd_for_ego_veh(
-                    next_wps_idx_start=next_wps_idx_start, next_wps_idx_end=next_wps_idx_end,
-                    next_decel_init_wp_idx=self.next_decel_init_wp_idx, max_spd=MAX_SPD, max_spd_chg=MAX_SPD_CHG,
-                    dt_btw_wps=DT_BTW_WPS)
-                for i, wp in enumerate(next_wps):
-                    wp.twist.twist.linear.x = spd_profile[i]
-            # Otherwise just use max spd, e.g. when tl_detector reports next_red_tl_wp_idx = -1.
-            else:
+            #############################################################
+            # 3. Get speed profile at each of next waypoints
+            #############################################################
+            # If all waypoints have been traversed, stop ego vehicle.
+            if len(next_wps) < 2:
                 for waypoint in next_wps:
-                    waypoint.twist.twist.linear.x = MAX_SPD
+                    waypoint.twist.twist.linear.x = 0
+            # Otherwise, determine proper speed profile.
+            else:
+                if self.next_red_tl_wp_idx >= 0 and self.next_decel_init_wp_idx >= 0:
+                    spd_profile = waypoint_updater_helper.gen_wp_spd_for_ego_veh(
+                        next_wps_idx_start=next_wps_idx_start, next_wps_idx_end=next_wps_idx_end,
+                        next_decel_init_wp_idx=self.next_decel_init_wp_idx, max_spd=MAX_SPD, max_spd_chg=MAX_SPD_CHG,
+                        dt_btw_wps=DT_BTW_WPS)
+                    for i, wp in enumerate(next_wps):
+                        wp.twist.twist.linear.x = spd_profile[i]
+                # Otherwise just use max spd, e.g. when tl_detector reports next_red_tl_wp_idx = -1.
+                else:
+                    for waypoint in next_wps:
+                        waypoint.twist.twist.linear.x = MAX_SPD
 
-            # Create and publish lane object to /final_waypoints topic
+            #############################################################
+            # 4. Create and publish lane object to /final_waypoints topic
+            #############################################################
             next_lane = waypoint_updater_helper.generate_lane_object(self.current_frame_id, next_wps)
             self.final_waypoints_pub.publish(next_lane)
 
