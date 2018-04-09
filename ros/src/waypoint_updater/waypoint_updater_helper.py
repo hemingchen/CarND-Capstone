@@ -1,9 +1,8 @@
-from math import cos, sin, sqrt
-import tf
-import rospy
-import numpy as np
 import math
+from math import cos, sin, sqrt
 
+import rospy
+import tf
 from styx_msgs.msg import Lane
 
 
@@ -91,16 +90,14 @@ def update_next_wps_spd_profile(next_wps, next_wps_idx_start, next_wps_idx_end, 
     """
     Generate speed profile for ego vehicle for next sequence of waypoints to be published to /final_waypoints.
     """
-    next_wps_len = next_wps_idx_end - next_wps_idx_start + 1
-
     # Condition 1:
     # When next decel init wp is way ahead, just maintain max speed.
     if next_decel_init_wp_idx > next_wps_idx_end:
         return next_wps
     # Condition 2:
-    # When next stop is close by, prepare to start constant deceleration.
+    # When next stop is close by, prepare to decelerate.
     else:
-        for wp_rel_idx, wp_global_idx in enumerate(range(next_wps_idx_start, next_wps_idx_end + 1)):
+        for wp_rel_idx, wp_global_idx in enumerate(range(next_wps_idx_start, next_wps_idx_end)):
             if wp_global_idx < next_decel_init_wp_idx:
                 # Maintain current waypoint speed, no need to change anything
                 pass
