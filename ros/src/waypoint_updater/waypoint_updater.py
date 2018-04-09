@@ -145,8 +145,10 @@ class WaypointUpdater(object):
             if len(next_wps) < 2:
                 for waypoint in next_wps:
                     waypoint.twist.twist.linear.x = 0
+
             # Otherwise, determine proper speed profile.
             else:
+                # If approaching a traffic light, adjust speed properly.
                 if self.next_red_tl_wp_idx >= 0 and self.next_decel_init_wp_idx >= 0:
                     spd_profile = waypoint_updater_helper.gen_wp_spd_for_ego_veh(
                         next_wps_idx_start=next_wps_idx_start, next_wps_idx_end=next_wps_idx_end,
