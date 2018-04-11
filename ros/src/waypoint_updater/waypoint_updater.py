@@ -45,17 +45,6 @@ class WaypointUpdater(object):
     def __init__(self):
         rospy.init_node('waypoint_updater', log_level=LOG_LEVEL)
 
-        rospy.Subscriber('/current_pose', PoseStamped, self.pose_cb)
-        rospy.Subscriber('/current_velocity', TwistStamped, self.current_velocity_cb)
-        rospy.Subscriber('/base_waypoints', Lane, self.waypoints_cb)
-        rospy.Subscriber('/traffic_waypoint', Int32, self.traffic_cb)
-        rospy.Subscriber('/obstacle_waypoint', Int32, self.obstacle_cb)
-
-        # Publish final waypoints, which are the next sequence of waypoints the ego vehicle needs to follow.
-        self.final_waypoints_pub = rospy.Publisher('/final_waypoints', Lane, queue_size=1)
-        # Publish ego vehicle waypoint idx, which is the idx of the base waypoints cloeses to ego vehicle.
-        self.ego_veh_waypoint_pub = rospy.Publisher('/ego_veh_waypoint', Int32, queue_size=1)
-
         self.current_pose = None
         self.current_velocity = None
         self.current_frame_id = None
@@ -70,6 +59,17 @@ class WaypointUpdater(object):
         # Identify numer of wps needed to a complete stop while traveling at MAX_SPD
         self.n_wps_to_stop_at_max_spd = waypoint_updater_helper.get_num_of_wps_during_const_spd_chg(
             v0=MAX_SPD, v1=0, a=-MAX_SPD_CHG, dt_btw_wps=DT_BTW_WPS)
+
+        rospy.Subscriber('/current_pose', PoseStamped, self.pose_cb)
+        rospy.Subscriber('/current_velocity', TwistStamped, self.current_velocity_cb)
+        rospy.Subscriber('/base_waypoints', Lane, self.waypoints_cb)
+        rospy.Subscriber('/traffic_waypoint', Int32, self.traffic_cb)
+        rospy.Subscriber('/obstacle_waypoint', Int32, self.obstacle_cb)
+
+        # Publish final waypoints, which are the next sequence of waypoints the ego vehicle needs to follow.
+        self.final_waypoints_pub = rospy.Publisher('/final_waypoints', Lane, queue_size=1)
+        # Publish ego vehicle waypoint idx, which is the idx of the base waypoints cloeses to ego vehicle.
+        self.ego_veh_waypoint_pub = rospy.Publisher('/ego_veh_waypoint', Int32, queue_size=1)
 
         # Had to use loop here to reduce load on vm, otherwise latency between vm and simulator will break the control.
         self.loop()
