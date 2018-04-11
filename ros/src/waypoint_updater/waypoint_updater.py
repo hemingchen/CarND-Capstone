@@ -37,6 +37,8 @@ INCR_WP_SEARCH_RANGE = 20
 DT_BTW_WPS = 0.02  # seconds
 # Int32 value from tl_detector if no valid red traffic light in sight
 NO_VALID_RED_TL_WP = -1
+# Adjust execution rate to reduce latency between vm and simulator on host
+WP_UPDATOR_RATE = 10
 
 
 class WaypointUpdater(object):
@@ -69,15 +71,21 @@ class WaypointUpdater(object):
         self.n_wps_to_stop_at_max_spd = waypoint_updater_helper.get_num_of_wps_during_const_spd_chg(
             v0=MAX_SPD, v1=0, a=-MAX_SPD_CHG, dt_btw_wps=DT_BTW_WPS)
 
-        rospy.spin()
+        # Had to use loop here to reduce load on vm, otherwise latency between vm and simulator will break the control.
+        self.loop()
+
+    def loop(self):
+        rate = rospy.Rate(WP_UPDATOR_RATE)
+        while not rospy.is_shutdown():
+            # Publish /final_waypoints at WP_UPDATOR_RATE frequency
+            self.publish_final_waypoints()
+
+            rate.sleep()
 
     def pose_cb(self, msg):
         # Record current pos and frame_id
         self.current_pose = msg.pose
         self.current_frame_id = msg.header.frame_id
-
-        # Publish next LOOKAHEAD_WPS waypoints
-        self.publish_final_waypoints()
 
     def current_velocity_cb(self, msg):
         # Record current linear and angular velocities of the ego vehicle
