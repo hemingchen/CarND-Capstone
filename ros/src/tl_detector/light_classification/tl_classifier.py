@@ -17,6 +17,9 @@ class TLClassifier(object):
         self.model_graph = None
         self.session = None
         self.image_counter = 0
+        # Note: These class numbers match those defined in label_map.pbtxt used in training done by tensorflow object
+        # detection api. They are DIFFERENT than those defined in ROS message TrafficLight.msg. Conversion needs to be
+        # done here before reporting back to tl_detector.
         self.classes = {1: TrafficLight.RED,
                         2: TrafficLight.YELLOW,
                         3: TrafficLight.GREEN,
@@ -34,7 +37,6 @@ class TLClassifier(object):
 
         Returns:
             int: ID of traffic light color (specified in styx_msgs/TrafficLight)
-
         """
         class_index, probability = self.predict(image)
 

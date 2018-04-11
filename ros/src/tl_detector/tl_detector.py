@@ -12,6 +12,7 @@ from std_msgs.msg import Int32
 from styx_msgs.msg import Lane
 from styx_msgs.msg import TrafficLightArray, TrafficLight
 
+import tl_detector_helper
 from light_classification.tl_classifier import TLClassifier
 
 LOG_LEVEL = rospy.INFO
@@ -58,6 +59,9 @@ class TLDetector(object):
         self.current_pose = None
         self.current_closest_wp_idx = None
         self.base_waypoints = None
+        self.base_waypoints_form_a_loop = False
+        self.base_waypoints_len = None
+        self.base_waypoints_last_idx = None
         self.current_camera_image = None
         self.current_tl_state = None
 
@@ -93,7 +97,16 @@ class TLDetector(object):
     def waypoints_cb(self, msg):
         # base_waypoints are only published once, it needs to be stored in this node
         self.base_waypoints = msg.waypoints
+        self.base_waypoints_len = len(self.base_waypoints)
+        self.base_waypoints_last_idx = self.base_waypoints_len - 1
         rospy.logdebug("%d base_waypoints received", len(self.base_waypoints))
+
+        # Check if base_waypoints form a loop
+        self.base_waypoints_form_a_loop = tl_detector_helper.wps_forms_a_loop(self.base_waypoints)
+        if self.base_waypoints_form_a_loop:
+            rospy.logdebug("base_waypoints form a loop")
+        else:
+            rospy.logdebug("base_waypoints do not form a loop")
 
     def traffic_cb(self, msg):
         self.traffic_lights = msg.lights
@@ -136,7 +149,7 @@ class TLDetector(object):
 
     def update_closest_wp_idx_to_traffic_lights(self):
         # Find out closest waypoints to each traffic light's stop line, do it only once.
-        if self.traffic_lights is not None and self.base_waypoints is not None and self.tl_wp_indices is None:
+        if (self.traffic_lights is not None) and (self.base_waypoints is not None) and (self.tl_wp_indices is None):
             tl_wp_indices = []
             for i_tl, tl in enumerate(self.traffic_lights):
                 tl_stopline_pos = Point()
@@ -156,14 +169,30 @@ class TLDetector(object):
                 self.traffic_lights is not None and \
                 self.base_waypoints is not None and \
                 self.tl_wp_indices is not None:
-            next_tl_wp_idx = \
-                min(tl_wp_idx for tl_wp_idx in self.tl_wp_indices if tl_wp_idx > self.current_closest_wp_idx)
-            next_tl_wp = self.base_waypoints[next_tl_wp_idx]
-            next_tl_idx = self.tl_wp_indices.index(next_tl_wp_idx)
-            dist_to_next_tl = sqrt((next_tl_wp.pose.pose.position.x - self.current_pose.position.x) ** 2 +
-                                   (next_tl_wp.pose.pose.position.y - self.current_pose.position.y) ** 2)
+            next_tl_wp_idx = None
+            candidate_tl_wp_indices = [tl_wp_idx for tl_wp_idx in self.tl_wp_indices if
+                                       tl_wp_idx > self.current_closest_wp_idx]
+            # When approaching the end of route and no more traffic light
+            if len(candidate_tl_wp_indices) == 0:
+                # Loop back to starting point if base_waypoints form a loop
+                if self.base_waypoints_form_a_loop:
+                    next_tl_wp_idx = min(self.tl_wp_indices)
+                # Route ends and no traffic light
+                else:
+                    next_tl_wp_idx = None
+            # Not approaching the end of route
+            else:
+                next_tl_wp_idx = min(candidate_tl_wp_indices)
 
-            return next_tl_idx, next_tl_wp_idx, dist_to_next_tl
+            if next_tl_wp_idx is not None:
+                next_tl_wp = self.base_waypoints[next_tl_wp_idx]
+                next_tl_idx = self.tl_wp_indices.index(next_tl_wp_idx)
+                dist_to_next_tl = sqrt((next_tl_wp.pose.pose.position.x - self.current_pose.position.x) ** 2 +
+                                       (next_tl_wp.pose.pose.position.y - self.current_pose.position.y) ** 2)
+
+                return next_tl_idx, next_tl_wp_idx, dist_to_next_tl
+            else:
+                return None, None, None
         else:
             return None, None, None
 
