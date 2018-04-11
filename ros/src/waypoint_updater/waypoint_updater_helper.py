@@ -50,7 +50,18 @@ def wp_is_in_front_of_ego_veh(pose, waypoint):
     return (shift_x * cos(0 - ego_yaw) - shift_y * sin(0 - ego_yaw)) > 0
 
 
-def get_closest_wp_idx(pose, waypoints, prev_closest_wp_idx, incr_wp_search_range):
+def wps_forms_a_loop(waypoints):
+    start_wp_position = waypoints[0].pose.pose.position
+    end_wp_position = waypoints[-1].pose.pose.position
+    dist = get_distance(start_wp_position, end_wp_position)
+    # If distance between start and end waypoints is small, then there is a loop.
+    if dist < 5:
+        return True
+    else:
+        return False
+
+
+def get_closest_wp_idx(pose, all_waypoints, prev_closest_wp_idx, incr_wp_search_range):
     """
     Get closest waypoint in front of ego vehicle
     """
@@ -58,8 +69,8 @@ def get_closest_wp_idx(pose, waypoints, prev_closest_wp_idx, incr_wp_search_rang
     ego_pos = pose.position
     closest_wp_idx = 0
     use_prev_closest_wp = True if prev_closest_wp_idx else False
-    wps_to_search = waypoints[prev_closest_wp_idx:prev_closest_wp_idx + incr_wp_search_range] \
-        if use_prev_closest_wp else waypoints
+    wps_to_search = all_waypoints[prev_closest_wp_idx:prev_closest_wp_idx + incr_wp_search_range] \
+        if use_prev_closest_wp else all_waypoints
 
     # Search for current nearest waypoint based on previous cycle result
     for i, wp in enumerate(wps_to_search):
@@ -70,6 +81,14 @@ def get_closest_wp_idx(pose, waypoints, prev_closest_wp_idx, incr_wp_search_rang
     # Add the offset back to get idx w.r.t the original base_waypoints
     if use_prev_closest_wp:
         closest_wp_idx += prev_closest_wp_idx
+
+    # If found vehicle near the last waypoint, check if the waypoints are actually a loop.
+    if closest_wp_idx == len(all_waypoints) - 1:
+        # Check if loop exists where the first waypoint might be close to ego vehicle
+        dist_to_1st_wp = get_distance(ego_pos, all_waypoints[0].pose.pose.position)
+        if dist_to_1st_wp < min_dist:
+            # Reset back to 1st waypoint
+            closest_wp_idx, min_dist = 0, dist_to_1st_wp
 
     return closest_wp_idx
 

@@ -22,7 +22,7 @@ as well as to verify your TL classifier.
 TODO (for Yousuf and Aaron): Stopline location for each traffic light.
 '''
 
-LOG_LEVEL = rospy.DEBUG
+LOG_LEVEL = rospy.INFO
 
 # Vehicle speed limit
 MPH_TO_MPS = 0.44704
@@ -58,6 +58,9 @@ class WaypointUpdater(object):
         self.current_velocity = None
         self.current_frame_id = None
         self.base_waypoints = None
+        self.base_waypoints_form_a_loop = False
+        self.base_waypoints_len = None
+        self.base_waypoints_last_idx = None
         self.current_closest_wp_idx = None
         self.next_red_tl_wp_idx = None
         self.next_decel_init_wp_idx = None
@@ -84,7 +87,16 @@ class WaypointUpdater(object):
     def waypoints_cb(self, msg):
         # base_waypoints are only published once, it needs to be stored in this node
         self.base_waypoints = msg.waypoints
+        self.base_waypoints_len = len(self.base_waypoints)
+        self.base_waypoints_last_idx = self.base_waypoints_len - 1
         rospy.logdebug("%d base_waypoints received", len(self.base_waypoints))
+
+        # Check if base_waypoints form a loop
+        self.base_waypoints_form_a_loop = waypoint_updater_helper.wps_forms_a_loop(self.base_waypoints)
+        if self.base_waypoints_form_a_loop:
+            rospy.logdebug("base_waypoints form a loop")
+        else:
+            rospy.logdebug("base_waypoints do not form a loop")
 
     def traffic_cb(self, msg):
         # Store next red traffic light stop line waypoint idx
@@ -111,7 +123,7 @@ class WaypointUpdater(object):
             #############################################################
             closest_wp_idx = waypoint_updater_helper.get_closest_wp_idx(
                 pose=self.current_pose,
-                waypoints=self.base_waypoints,
+                all_waypoints=self.base_waypoints,
                 prev_closest_wp_idx=self.current_closest_wp_idx,
                 incr_wp_search_range=INCR_WP_SEARCH_RANGE)
 
@@ -125,19 +137,43 @@ class WaypointUpdater(object):
             # 2. Get next LOOKAHEAD_WPS waypoints in front of ego vehicle
             #############################################################
             next_wps_idx_start = closest_wp_idx
-            next_wps_idx_end = min(len(self.base_waypoints), closest_wp_idx + LOOKAHEAD_WPS)
+            next_wps_idx_end = min(self.base_waypoints_last_idx, closest_wp_idx + LOOKAHEAD_WPS - 1)
+            if self.base_waypoints_form_a_loop and next_wps_idx_end == self.base_waypoints_last_idx:
+                next_wps_idx_end = LOOKAHEAD_WPS - (next_wps_idx_end - next_wps_idx_start + 1) - 1
             rospy.logdebug("next final wp idx: %s-%s", next_wps_idx_start, next_wps_idx_end)
 
             # Create next waypoints from fresh
             next_wps = []
-            for i in range(next_wps_idx_start, next_wps_idx_end):
-                wp = Waypoint()
-                wp.pose.pose.position.x = self.base_waypoints[i].pose.pose.position.x
-                wp.pose.pose.position.y = self.base_waypoints[i].pose.pose.position.y
-                wp.pose.pose.position.z = self.base_waypoints[i].pose.pose.position.z
-                # For now, use default waypoint speed already defined by waypoint_loader.
-                wp.twist.twist.linear.x = self.base_waypoints[i].twist.twist.linear.x
-                next_wps.append(wp)
+            if next_wps_idx_end >= next_wps_idx_start:
+                for i in range(next_wps_idx_start, next_wps_idx_end + 1):
+                    wp = Waypoint()
+                    wp.pose.pose.position.x = self.base_waypoints[i].pose.pose.position.x
+                    wp.pose.pose.position.y = self.base_waypoints[i].pose.pose.position.y
+                    wp.pose.pose.position.z = self.base_waypoints[i].pose.pose.position.z
+                    # For now, use default waypoint speed already defined by waypoint_loader.
+                    wp.twist.twist.linear.x = self.base_waypoints[i].twist.twist.linear.x
+                    next_wps.append(wp)
+            else:
+                # Tail of base_waypoints
+                for i in range(next_wps_idx_start, self.base_waypoints_last_idx + 1):
+                    wp = Waypoint()
+                    wp.pose.pose.position.x = self.base_waypoints[i].pose.pose.position.x
+                    wp.pose.pose.position.y = self.base_waypoints[i].pose.pose.position.y
+                    wp.pose.pose.position.z = self.base_waypoints[i].pose.pose.position.z
+                    # For now, use default waypoint speed already defined by waypoint_loader.
+                    wp.twist.twist.linear.x = self.base_waypoints[i].twist.twist.linear.x
+                    next_wps.append(wp)
+
+                # Loops back to the beginning of the base_waypoints
+                for i in range(0, next_wps_idx_end + 1):
+                    wp = Waypoint()
+                    wp.pose.pose.position.x = self.base_waypoints[i].pose.pose.position.x
+                    wp.pose.pose.position.y = self.base_waypoints[i].pose.pose.position.y
+                    wp.pose.pose.position.z = self.base_waypoints[i].pose.pose.position.z
+                    # For now, use default waypoint speed already defined by waypoint_loader.
+                    wp.twist.twist.linear.x = self.base_waypoints[i].twist.twist.linear.x
+                    next_wps.append(wp)
+
             rospy.logdebug("next final wp len: %s", len(next_wps))
 
             #############################################################
