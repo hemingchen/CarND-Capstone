@@ -60,8 +60,8 @@ and publishes to the following topics:
 It follows below procedures:
 
 1. Pass the proposed twist command and current twist information to the `twist_controller`, which will then compute the throttle, brake and steer.
-2. The `twist_controller` internally uses a PID Controller for linear speed control and a Yaw Controller for steering control, which are provided by Udacity template.
-3. If `dbw_enabled` is true, `twist_controller` publishes the computed throttle, brake and steer angle to their respective topics. Otherwise, it will not publish anything since the ego vehicle is in manual mode.
+2. Use a PID Controller for linear speed control and a Yaw Controller for steering control, which are provided by Udacity template.
+3. If `dbw_enabled` is true, publish the computed throttle, brake and steer angle to their respective topics. Otherwise, do not publish anything since the ego vehicle is in manual mode.
 
 where
 
