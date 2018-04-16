@@ -83,6 +83,7 @@ where:
 - `tl_detector` can run as fast as 3Hz on my PC before causing significant frame drops in simulator.
 - Traffic light visibility threshold `TL_VISIBLE_DIST = 100` meters.
 - `TL_DETECTOR_RATE = 3` where a new detection is not announced until 3 successive same-type detection is made.
+- Helper functions in `tl_detector/tl_detector_helper.py` were used.
 
 ## II. How to use
 For development and simulation tests, I used Windows 10 host (for simulator) and Udacity VM guest (for ROS).
