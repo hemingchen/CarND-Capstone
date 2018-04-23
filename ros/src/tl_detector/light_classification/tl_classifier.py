@@ -20,9 +20,9 @@ class TLClassifier(object):
         # Note: These class numbers match those defined in label_map.pbtxt used in training done by tensorflow object
         # detection api. They are DIFFERENT than those defined in ROS message TrafficLight.msg. Conversion needs to be
         # done here before reporting back to tl_detector.
-        self.classes = {1: TrafficLight.RED,
-                        2: TrafficLight.YELLOW,
-                        3: TrafficLight.GREEN,
+        self.classes = {1: TrafficLight.GREEN,
+                        2: TrafficLight.RED,
+                        3: TrafficLight.YELLOW,
                         4: TrafficLight.UNKNOWN}
 
         config_string = rospy.get_param("/traffic_light_config")
@@ -101,13 +101,13 @@ class TLClassifier(object):
     def resize_image(self, image):
         height, width = image.shape[:2]
 
-        # only shrink if img is bigger than required
+        # Shrink if image is too big
         if MAX_IMAGE_HEIGHT < height or MAX_IMAGE_WIDTH < width:
-            # get scaling factor
+            # Get scaling factor
             scaling_factor = MAX_IMAGE_HEIGHT / float(height)
             if MAX_IMAGE_WIDTH / float(width) < scaling_factor:
                 scaling_factor = MAX_IMAGE_WIDTH / float(width)
-            # resize image
+            # Resize image
             image = cv2.resize(image, None, fx=scaling_factor, fy=scaling_factor, interpolation=cv2.INTER_AREA)
 
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
