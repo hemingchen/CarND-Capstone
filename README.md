@@ -75,7 +75,7 @@ It follows the following procedures:
 
 1. Based on the current location of ego vehicle, find out the next traffic light and its stop line location.
 2. Read the image from camera and determine the traffic light state.
-3. If the traffic light state is `UNKNOWN` or `GREEN`, do not intervene.
+3. If the traffic light state is not `RED`, i.e. `YELLOW`, `GREEN` or `UNKNOWN`, do not intervene.
 4. If the traffic light state is `RED`, publish the index of the waypoint nearest to the stop line of such traffic light.
 
 where:
