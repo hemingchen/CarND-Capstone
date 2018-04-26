@@ -200,7 +200,7 @@ class TLDetector(object):
         # Maintain a FIFO stack with length STATE_COUNT_THRESHOLD
         self.last_n_tl_state_preds.append(next_tl_state_raw_pred)
         if len(self.last_n_tl_state_preds) > STATE_COUNT_THRESHOLD:
-            self.last_n_tl_state_preds.pop()
+            self.last_n_tl_state_preds.pop(0)
 
         # If all elements are the same and different than current state, declare a new state.
         if len(set(self.last_n_tl_state_preds)) == 1 and next_tl_state_raw_pred != self.current_tl_state:
